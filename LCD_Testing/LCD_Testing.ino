@@ -11,7 +11,7 @@ LiquidCrystal_I2C lcd(0x27,20,4);  // set the LCD address to 0x27 for a 16 chars
 void setup()
 {
   pinMode(backlightPin, INPUT);
-  lcd.init();                      // initialize the lcd 
+//  lcd.init();                      // initialize the lcd 
   // Print a message to the LCD.
   //lcd.backlight();
   lcd.noBacklight();

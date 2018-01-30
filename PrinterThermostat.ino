@@ -1,125 +1,163 @@
+//
+// Written for the Arduino Nano, ATmega 328, 5.0V version
+//
+//**************************************************
+// Temperature sensor stuff here
+//**************************************************
 #include <OneWire.h>
+#include <DallasTemperature.h>
 
-float lowSet = 40.0; // Low temp where relay turns on
+// Sensor plugged into digital port 3 on the arduino
+#define ONE_WIRE_BUS 3
+#define TEMPERATURE_PRECISION 12
 
-OneWire  ds(3);  // on pin 3 (a 4.7K resistor is necessary)
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
 
-long timeN;
-double secs;
-double mins;
-double hrs;
+int numberOfDevices;
+int idNum=0;
+int sensorDelay=100;
+char units='c';
+DeviceAddress tempDeviceAddress;
 
-//Relay #8 controlled by thermostat, pin 8
+//**************************************************
+// LCD stuff here
+//**************************************************
+#include <Wire.h>
+#include<LiquidCrystal_I2C.h>
+// from https://github.com/fdebrabander/Arduino-LiquidCrystal-I2C-library
+
+int thermostatSwitch = 11;
+
+LiquidCrystal_I2C lcd(0x27,20,4); //set address to 0x27 for 20 characters and 4 lines
+
+//**************************************************
+// Thermostat stuff
+//**************************************************
+float lowSet=40;
+int switchThermostat=0;
 int relayPin8 = 8;
 
-
-void setup() {
+void setup(void)
+{
+  // start serial for debugging
   Serial.begin(9600);
-  Serial.println("Debug start");
-  pinMode(relayPin8, OUTPUT);      // sets the digital pin as output  
-  digitalWrite(relayPin8, LOW);        // Prevents relays from starting up engaged
+  Serial.println("Begin debug");
+  //**************************************************
+  // Temp sensor stuff
+  //**************************************************
+  sensors.begin(); //start library
+  //count devices
+  numberOfDevices = sensors.getDeviceCount();
+  Serial.print("Found ");
+  Serial.print(numberOfDevices, DEC);
+  Serial.println(" devices");
+  // Loop through each device, print out address
+  for(int i=0;i<numberOfDevices; i++)
+  {
+    // Search the wire for address
+    if(sensors.getAddress(tempDeviceAddress, i))
+  {
+    Serial.print("Found device ");
+    Serial.print(i, DEC);
+    Serial.print(" with address: ");
+    printAddress(tempDeviceAddress);
+    Serial.println();
+    
+    Serial.print("Setting resolution to ");
+    Serial.println(TEMPERATURE_PRECISION, DEC);
+    
+    // set the resolution to TEMPERATURE_PRECISION bit (Each Dallas/Maxim device is capable of several different resolutions)
+    sensors.setResolution(tempDeviceAddress, TEMPERATURE_PRECISION);
+    
+     Serial.print("Resolution actually set to: ");
+    Serial.print(sensors.getResolution(tempDeviceAddress), DEC); 
+    Serial.println();
+  }else{
+    Serial.print("Found ghost device at ");
+    Serial.print(i, DEC);
+    Serial.print(" but could not detect address. Check power and cabling");
+  }
+  }
+
+  //**************************************************
+  // LCD stuff
+  //**************************************************
+     //lcd.init();
+  lcd.begin();
+  lcd.backlight();
+  lcd.setCursor(1,1);
+  lcd.print("3D Printer Cabinet");
+  lcd.setCursor(5,2);
+  lcd.print("Thermostat");
+  delay(2000);
+  lcd.clear();
+  Serial.println("End setup");
+
+    //**************************************************
+  // Thermostat stuff
+  //**************************************************
+  pinMode(relayPin8, OUTPUT);
 }
-
-void loop(void) {
-  byte i;
-  byte present = 0;
-  byte type_s;
-  byte data[12];
-  byte addr[8];
-  float celsius, fahrenheit;
-  
-  if ( !ds.search(addr)) {
-    ds.reset_search();
-    delay(250);
-    return;
-  }
-  
-  if (OneWire::crc8(addr, 7) != addr[7]) {
-      Serial.println("CRC is not valid!");
-      return;
-  }
-  
-  // the first ROM byte indicates which chip
-  switch (addr[0]) {
-    case 0x10:
-      //Serial.println("  Chip = DS18S20");  // or old DS1820
-      type_s = 1;
-      break;
-    case 0x28:
-      //Serial.println("  Chip = DS18B20");
-      type_s = 0;
-      break;
-    case 0x22:
-      //Serial.println("  Chip = DS1822");
-      type_s = 0;
-      break;
-    default:
-      //Serial.println("Device is not a DS18x20 family device.");
-      return;
-  } 
-
-  ds.reset();
-  ds.select(addr);
-  ds.write(0x44, 1);        // start conversion, with parasite power on at the end
-  
-  delay(1000);     // maybe 750ms is enough, maybe not
-  
-  present = ds.reset();
-  ds.select(addr);    
-  ds.write(0xBE);         // Read Scratchpad
-
-  for ( i = 0; i < 9; i++) {           // we need 9 bytes
-    data[i] = ds.read();
-  }
-  
-  // Convert the data to actual temperature
-  // because the result is a 16 bit signed integer, it should
-  // be stored to an "int16_t" type, which is always 16 bits
-  // even when compiled on a 32 bit processor.
-  int16_t raw = (data[1] << 8) | data[0];
-  if (type_s) {
-    raw = raw << 3; // 9 bit resolution default
-    if (data[7] == 0x10) {
-      // "count remain" gives full 12 bit resolution
-      raw = (raw & 0xFFF0) + 12 - data[6];
+void loop(void)
+{
+  //**************************************************
+  // Temp sensor stuff
+  //**************************************************
+  // get temps for all devices on the bus
+  sensors.requestTemperatures();
+  // create an array to store temps
+  float temps[numberOfDevices];
+  // loop through devices and store temps
+  for(int i=0;i<numberOfDevices; i++)
+  {
+    if(sensors.getAddress(tempDeviceAddress, i))
+    {
+      temps[i] = sensors.getTempC(tempDeviceAddress);
     }
-  } else {
-    byte cfg = (data[4] & 0x60);
-    // at lower res, the low bits are undefined, so let's zero them
-    if (cfg == 0x00) raw = raw & ~7;  // 9 bit resolution, 93.75 ms
-    else if (cfg == 0x20) raw = raw & ~3; // 10 bit res, 187.5 ms
-    else if (cfg == 0x40) raw = raw & ~1; // 11 bit res, 375 ms
-    //// default is 12 bit resolution, 750 ms conversion time
   }
-  celsius = (float)raw / 16.0;
-  fahrenheit = celsius * 1.8 + 32.0;
-  
-  //Time calculation
-  timeN = millis();
-  secs = timeN / 1000;
-  mins = secs / 60;
-  hrs = mins / 60;
-  
-  /*----------
-  Serial output, read with python script
-  ----------*/
-  Serial.print("  Temperature = ");
-  Serial.print(celsius);
-  Serial.print(" Celsius, ");
-  Serial.print(hrs,4);
-  Serial.print(",");
-  Serial.println(fahrenheit);
-  //Serial.println(" Fahrenheit");
-  
-  // Relay control section, limits set in lines 3 and 4
-  if (celsius < lowSet) {
-    relayOn (relayPin8);
-  } else {
-    relayOff (relayPin8);
+  // delay long enough for the sensors to refresh
+  delay(sensorDelay);
+
+  //**************************************************
+  // LCD stuff
+  //**************************************************
+  lcd.setCursor(0,0);
+  lcd.print("Temp: ");
+  lcd.print(temps[0]);
+  lcd.print("C");
+  lcd.setCursor(0,1);
+  lcd.print("Setpoint: ");
+  lcd.print(lowSet);
+  lcd.print("C");
+
+  //**************************************************
+  // Thermostat stuff
+  //**************************************************
+  lcd.setCursor(0,2);
+  if(digitalRead(thermostatSwitch) == HIGH)
+  {
+    lcd.print("Thermostat on ");
+    lcd.setCursor(0,3);
+    Serial.println("thermostat on");
+    if (temps[0] < lowSet)
+    {
+      Serial.println("heater on");
+      digitalWrite(relayPin8, HIGH);
+      lcd.print("Heater on ");
+    }
+    else{
+      Serial.println("heater off");
+      digitalWrite(relayPin8, LOW);
+      lcd.print("Heater off");
+    }
+  }else{
+    Serial.println("thermostat off");
+    lcd.print("Thermostat off");
+    lcd.setCursor(0,3);
+    lcd.print("Heater off");
+    digitalWrite(relayPin8, LOW);
   }
-  Serial.println("loop");
+  Serial.println("Loop");
 }
 
-int relayOn (int relayNumber) {digitalWrite(relayNumber, HIGH);}
-
-int relayOff (int relayNumber) {digitalWrite(relayNumber,LOW);}
